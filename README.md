@@ -20,6 +20,7 @@
   - [macOS](#macos)
     - [Without a package manager](#without-a-package-manager)
     - [Homebrew](#homebrew)
+    - [Build locally on Apple Silicon](#build-locally-on-apple-silicon)
 - [Command line parameters](#command-line-parameters)
 - [Portable mode](#portable-mode)
 - [Fixed hotkeys](#fixed-hotkeys)
@@ -106,6 +107,22 @@ This method requires no additional prerequisites or dependencies:
 You need to have [Homebrew](https://brew.sh/) installed. Execute this command to install Transmission Remote GUI:
 
 - `brew install --cask transmission-remote-gui`
+
+#### Build locally on Apple Silicon
+
+Install native FPC 3.2.2, Lazarus 2.2.6 (including `lazbuild` and the Cocoa LCL),
+and Xcode command-line tools. From the repository root, pass your Lazarus directory
+to the macOS build script:
+
+```sh
+(cd setup/macosx && ./create_app_new.sh "$HOME/.local/opt/lazarus-2.2.6")
+```
+
+The script uses `fpc` from `PATH` and produces an ARM64-only DMG under `Release/`.
+Set `FPC=/path/to/fpc` or `MACOSX_SDK=/path/to/MacOSX.sdk` if needed.
+FPC 3.2.2 needs an SDK no newer than macOS 26 for its Cocoa linker workaround;
+when available, the script uses the Command Line Tools macOS 26 SDK instead of
+Xcode 27's SDK. The release CI build remains Intel-only.
 
 ## Command line parameters
 

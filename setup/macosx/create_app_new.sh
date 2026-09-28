@@ -3,20 +3,30 @@
 set -ex
 
 lazarus_dir="${1:-/Applications/Lazarus/}"
-lazbuild_bin="$lazarus_dir/lazbuild"
-if [ "${lazarus_dir%/}" != "/Applications/Lazarus" ] && [ ! -x "$lazbuild_bin" ]; then
-  echo "Unable to find lazbuild at $lazbuild_bin." >&2
+lazbuild_bin="${lazarus_dir%/}/lazbuild"
+case "$(uname -m)" in
+  arm64) cpu_target=aarch64 ;;
+  x86_64) cpu_target=x86_64 ;;
+  *) echo "Unsupported macOS architecture: $(uname -m)" >&2; exit 1 ;;
+esac
+if [ "$cpu_target" = aarch64 ] && [ ! -x "$lazbuild_bin" ]; then
+  echo "Unable to find lazbuild at $lazbuild_bin. Pass your Lazarus directory as the first argument." >&2
   exit 1
 fi
 
 prog_ver="$(cat ../../VERSION.txt)"
 build="$(git rev-list --abbrev-commit --max-count=1 HEAD ../..)"
 
-if [ -z "${CI-}" ]; then
+# The packaged installer is for Intel Lazarus; use preinstalled tools on Apple Silicon.
+if [ -z "${CI-}" ] && [ "$cpu_target" = x86_64 ]; then
   ./install_deps.sh
 fi
 
-fpc_bin="/usr/local/bin/fpc"
+if [ "$cpu_target" = aarch64 ]; then
+  fpc_bin="${FPC:-$(command -v fpc || true)}"
+else
+  fpc_bin="${FPC:-/usr/local/bin/fpc}"
+fi
 if [ ! -x "$fpc_bin" ]; then
   echo "Unable to find fpc at $fpc_bin." >&2
   exit 1
@@ -33,6 +43,18 @@ if [ ! -x "$lazbuild_bin" ]; then
   exit 1
 fi
 lazarus_ver="$("$lazbuild_bin" -v)"
+if [ "$cpu_target" = aarch64 ]; then
+  # The older linker needed for FPC 3.2.2 cannot read Xcode 27 SDK stubs.
+  if [ -z "${MACOSX_SDK-}" ] && [ -d /Library/Developer/CommandLineTools/SDKs/MacOSX26.sdk ]; then
+    MACOSX_SDK=/Library/Developer/CommandLineTools/SDKs/MacOSX26.sdk
+  fi
+  MACOSX_SDK="${MACOSX_SDK:-$(xcrun --sdk macosx --show-sdk-path)}"
+  if [ ! -d "$MACOSX_SDK" ]; then
+    echo "macOS SDK not found: $MACOSX_SDK" >&2
+    exit 1
+  fi
+  export MACOSX_SDK
+fi
 mount_device=""
 remove_dmg_temp=0
 remove_dmgfolder=0
@@ -96,9 +118,7 @@ cleanup() {
   exit "$status"
 }
 
-if [ ! "$lazarus_dir" = "" ]; then
-  lazdir=LAZARUS_DIR="$lazarus_dir"
-fi
+lazdir=LAZARUS_DIR="$lazarus_dir"
 
 if [ -e ../../about.lfm.bak ]; then
   echo "../../about.lfm.bak already exists; refusing to overwrite it." >&2
@@ -125,8 +145,21 @@ cleanup_lazbuild_state() {
 
 run_lazbuild() {
   cleanup_lazbuild_state
-  "$lazbuild_bin" -B ../../trcomp.lpk --lazarusdir="$lazarus_dir" --compiler="$fpc_bin" --cpu=x86_64 --widgetset=cocoa --pcp="$lazarus_pcp"
-  "$lazbuild_bin" -B ../../transgui.lpi --lazarusdir="$lazarus_dir" --compiler="$fpc_bin" --cpu=x86_64 --widgetset=cocoa --pcp="$lazarus_pcp"
+  lazbuild_compiler="$fpc_bin"
+  if [ "$cpu_target" = aarch64 ]; then
+    # Lazarus does not pass Makefile.fpc's linker options to its project build.
+    # Supply the same ARM64-only flags without changing the shared .lpi file.
+    lazbuild_compiler="$lazarus_pcp/fpc-arm64"
+    TRANSGUI_FPC_BIN="$fpc_bin"
+    export TRANSGUI_FPC_BIN
+    cat > "$lazbuild_compiler" <<'SH'
+#!/bin/sh
+exec "$TRANSGUI_FPC_BIN" "-XR$MACOSX_SDK" -k-no_objc_relative_method_lists "$@"
+SH
+    chmod +x "$lazbuild_compiler"
+  fi
+  "$lazbuild_bin" -B ../../trcomp.lpk --lazarusdir="$lazarus_dir" --compiler="$lazbuild_compiler" --cpu="$cpu_target" --widgetset=cocoa --pcp="$lazarus_pcp"
+  "$lazbuild_bin" -B ../../transgui.lpi --lazarusdir="$lazarus_dir" --compiler="$lazbuild_compiler" --cpu="$cpu_target" --widgetset=cocoa --pcp="$lazarus_pcp"
 }
 
 mkdir -p ../../Release/
@@ -134,9 +167,9 @@ sed -i.bak "s/'Version %s'/'Version %s Build $build'#13#10'Compiled by: $fpc_ver
 
 run_lazbuild
 
-# Building Intel version
-make -j"$(sysctl -n hw.ncpu)" -C ../.. clean CPU_TARGET=x86_64 FPC="$fpc_bin" "$lazdir"
-make -j"$(sysctl -n hw.ncpu)" -C ../.. CPU_TARGET=x86_64 FPC="$fpc_bin" "$lazdir"
+# Build for the host architecture; the release CI runner remains Intel.
+make -j"$(sysctl -n hw.ncpu)" -C ../.. clean CPU_TARGET="$cpu_target" FPC="$fpc_bin" "$lazdir"
+make -j"$(sysctl -n hw.ncpu)" -C ../.. CPU_TARGET="$cpu_target" FPC="$fpc_bin" "$lazdir"
 
 if ! [ -e $exename ]; then
   echo "$exename does not exist"

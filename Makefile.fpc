@@ -29,6 +29,15 @@ endif
 
 $(info Using Lazarus dir: $(LAZARUS_DIR))
 
+# Keep the existing Intel deployment target; Apple Silicon requires macOS 11+.
+DARWIN_COMPILER_OPTIONS=-k-macosx_version_min -k10.5 -XR/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk
+ifeq ($(CPU_TARGET),aarch64)
+  # FPC 3.2.2's Cocoa objects need traditional ObjC method lists. The linker
+  # handling them cannot read Xcode 27's SDK stubs, so prefer the CLT 26 SDK.
+  MACOSX_SDK ?= $(if $(wildcard /Library/Developer/CommandLineTools/SDKs/MacOSX26.sdk),/Library/Developer/CommandLineTools/SDKs/MacOSX26.sdk,$(shell xcrun --sdk macosx --show-sdk-path))
+  DARWIN_COMPILER_OPTIONS=-k-macosx_version_min -k11.0 -XR$(MACOSX_SDK) -k-no_objc_relative_method_lists
+endif
+
 LAZRES=$(LAZARUS_DIR)/tools/lazres$(SRCEXEEXT)
 
 # Widgetset
@@ -49,7 +58,7 @@ endif
 [compiler]
 unitdir=synapse/source/lib
 options=-MObjFPC -dLCL -dLCL$(LCL_WIDGETSET) $(COMP_OPT)
-options_darwin=-k-macosx_version_min -k10.5 -XR/Developer/SDKs/MacOSX10.5.sdk/
+options_darwin=$(DARWIN_COMPILER_OPTIONS)
 
 #Lazarus dirs
 unitdir=$(LAZARUS_DIR)/lcl/units/$(FULL_TARGET)
